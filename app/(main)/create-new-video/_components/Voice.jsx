@@ -9,7 +9,7 @@ const voiceOptions = [
         "name": "Beta(Female)"
     },
     {
-        "value":"hf_omega",
+        "value":"hm_omega",
         "name": "Omega(Male)"
     },
     {
