@@ -1,24 +1,31 @@
 import { generateScript } from "@/app/configs/AiModel";
 import { NextResponse } from "next/server";
 
-const SCRIPT_PROMPT = `write a two different script for 30 seconds video on Topic:{topic},
-Do not add scene description
-Do not add anything in braces, just return the plain story in text
-Give me response in JSON format and follow the schema
--{
-scripts:[
+const SCRIPT_PROMPT = `You are a creative educational script writer. 
+Write two different scripts for a 30-second educational video on the topic: {topic}, tailored for the age group: {ageGroup}.
+
+Instructions:
+- Do not use dialogue format (no "Teen 1", "Narrator", etc).
+- Use simple, clear, and age-appropriate language.
+- Write it as a short engaging explanation or story in paragraph format.
+- Do not add scene descriptions or anything in parentheses/braces.
+Give me response in JSON format and follow the schema:
 {
-content:""
-},
-],
-}` 
+  scripts:[
+    {
+      content:""
+    }
+  ]
+}`;
+
 export async function POST(req) {
-    const {topic}=await req.json();
+    const { topic, ageGroup } = await req.json();  // ✅ Extract ageGroup from request
     
-    const PROMPT=SCRIPT_PROMPT.replace('{topic}',topic);
-    
-    const result=await generateScript.sendMessage(PROMPT);
-    const resp=result?.response?.text();
+    // Replace placeholders with actual values
+    const PROMPT = SCRIPT_PROMPT.replace('{topic}', topic).replace('{ageGroup}', ageGroup);
+
+    const result = await generateScript.sendMessage(PROMPT);
+    const resp = result?.response?.text();
 
     return NextResponse.json(JSON.parse(resp));
 }
