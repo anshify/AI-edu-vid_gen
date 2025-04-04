@@ -2,7 +2,7 @@ import { generateScript } from "@/app/configs/AiModel";
 import { NextResponse } from "next/server";
 
 const SCRIPT_PROMPT = `You are a creative educational script writer. 
-Write two different scripts for a 30-second educational video on the topic: {topic}, tailored for the age group: {ageGroup}.
+Write two different scripts for a 27-second educational video on the topic: {topic}, tailored for the age group: {ageGroup}.
 
 Instructions:
 - Do not use dialogue format (no "Teen 1", "Narrator", etc).
