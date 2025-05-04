@@ -1,134 +1,110 @@
 import axios from "axios";
 import { inngest } from "./client";
-import { createClient } from "@deepgram/sdk"; 
+import { createClient } from "@deepgram/sdk";
 import { GenerateImageScript } from "@/app/configs/AiModel";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
 
-const ImagePromptScript = `Generate Image prompt of {style} style with all details for each scene for 30 seconds video : script: {script}
-- Just Give specific image prompt depends on the story line
-- do not give camera angle image prompt
-- Follow the Following schema and return JSON data (Max 4-5 Images)
-- [
-    {
-        imagePrompt:'',
-        sceneContent: ' <Script Content>'
-    
-    }
-]`
+const BASE_URL = 'https://aigurulab.tech';
 
-export const helloWorld = inngest.createFunction(
-  { id: "hello-world" },
-  { event: "test/hello.world" },
+export const GenerateVideoData = inngest.createFunction(
+  { id: 'generate-video-data' },
+  { event: 'generate-video-data' },
   async ({ event, step }) => {
-    await step.sleep("wait-a-moment", "1s");
-    return { message: `Hello ${event.data.email}!` };
-  },
+    const { script, topic, title, caption, videoStyle, voice, recordId } = event?.data;
+    const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL);
+
+    // Step 1: Generate Audio file mp3
+    const GenerateAudioFile = await step.run("GenerateAudioFile", async () => {
+      const result = await axios.post(
+        `${BASE_URL}/api/text-to-speech`,
+        { input: script, voice },
+        {
+          headers: {
+            "x-api-key": process.env.NEXT_PUBLIC_AIGURULAB_API_KEY,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      return result.data.audio;
+    });
+
+    // Step 2: Generate Captions + Duration
+    const { captions, durationSec } = await step.run("generateCaptions", async () => {
+      const deepgram = createClient(process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY);
+      const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
+        { url: GenerateAudioFile },
+        { model: "nova-3" }
+      );
+      if (error) throw new Error(error);
+
+      const words = result.results?.channels[0]?.alternatives[0]?.words;
+      const startTime = words[0]?.start || 0;
+      const endTime = words[words.length - 1]?.end || 0;
+      const duration = endTime - startTime;
+
+      return { captions: words, durationSec: duration };
+    });
+
+    // Step 3: Generate Image Prompts (adaptive to duration)
+    const GenerateImagePrompts = await step.run("generateImagePrompt", async () => {
+      const numberOfScenes = Math.ceil(durationSec / 7); // 1 image every ~7 seconds
+      const dynamicPrompt = `
+        Generate ${numberOfScenes} unique image prompts of "${videoStyle}" style based on the following script:
+        ----
+        ${script}
+        ----
+        Return the result in JSON array format as:
+        [
+          {
+            "imagePrompt": "<prompt for AI image>",
+            "sceneContent": "<related part of the script>"
+          }
+        ]
+        Don't include camera angles or styles like close-up, only focus on detailed visuals from story.
+      `;
+      const result = await GenerateImageScript.sendMessage(dynamicPrompt);
+      const text = await result.response.text();
+      return JSON.parse(text);
+    });
+
+    // Step 4: Generate Images
+    const GenerateImages = await step.run("generateImages", async () => {
+      const images = await Promise.all(
+        GenerateImagePrompts.map(async (element) => {
+          const res = await axios.post(
+            `${BASE_URL}/api/generate-image`,
+            {
+              width: 1024,
+              height: 1024,
+              input: element.imagePrompt,
+              model: 'sdxl',
+              aspectRatio: "1:1"
+            },
+            {
+              headers: {
+                "x-api-key": process.env.NEXT_PUBLIC_AIGURULAB_API_KEY,
+                "Content-Type": "application/json",
+              },
+            }
+          );
+          return res.data.image;
+        })
+      );
+      return images;
+    });
+
+    // Step 5: Save to DB
+    const UpdateDB = await step.run("UpdateDB", async () => {
+      const result = await convex.mutation(api.videoData.UpdateVideoRecord, {
+        recordId,
+        audioUrl: GenerateAudioFile,
+        captionJson: captions,
+        images: GenerateImages,
+      });
+      return result;
+    });
+
+    return '✅ Executed Successfully!';
+  }
 );
-
-const BASE_URL='https://aigurulab.tech';
-
-export const GenerateVideoData=inngest.createFunction(
-    {id:'generate-video-data'},
-    {event:'generate-video-data'},
-    async({event,step})=>{
-       
-        const {script,topic,title,caption,videoStyle,voice , recordId}=event?.data;
-        const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL)
-       //Generate Audio file mp3
-       const GenerateAudioFile=await step.run(
-        "GenerateAudioFile",
-        async()=>{
-            const result = await axios.post(BASE_URL+'/api/text-to-speech',
-                {
-                    input: script,
-                    voice: voice
-                },
-                {
-                    headers: {
-                        'x-api-key': process.env.NEXT_PUBLIC_AIGURULAB_API_KEY , // Your API Key
-                        'Content-Type': 'application/json', // Content Type
-                    },
-                })
-            return result.data.audio;
-        }
-       )
-
-       //Generate Captions
-       const GenerateCaptions=await step.run(
-        "generateCaptions",
-        async()=>{
-            const deepgram = createClient(process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY);
-            // STEP 2: Call the transcribeUrl method with the audio payload and options
-            const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
-             {
-                url: GenerateAudioFile,
-             },
-             // STEP 3: Configure Deepgram options for audio analysis
-             {
-                model: "nova-3",
-             }
-            );
-            return result.results?.channels[0]?.alternatives[0]?.words;
-        }
-       )
-
-       //Generate Image prompt from Script
-       const GenerateImagePrompts = await step.run(
-          "generateImagePrompt",
-          async()=>{
-            const FINAL_PROMPT=ImagePromptScript
-            .replace('{style}',videoStyle).replace('{script}',script);
-            const result = await GenerateImageScript.sendMessage(FINAL_PROMPT);
-            const resp=JSON.parse(result.response.text());
-
-            return resp;
-          }
-       )
-       //Generate Images using AI
-
-       const GenerateImages=await step.run(
-          "generateImages",
-          async()=>{
-            let images=[];
-            images=await Promise.all(
-                GenerateImagePrompts.map(async(element)=>{
-                    const result = await axios.post(BASE_URL+'/api/generate-image',
-                        {
-                            width: 1024,
-                            height: 1024,
-                            input: element?.imagePrompt,
-                            model: 'sdxl',//'flux'
-                            aspectRatio:"1:1"//Applicable to Flux model only
-                        },
-                        {
-                            headers: {
-                                'x-api-key': process.env.NEXT_PUBLIC_AIGURULAB_API_KEY, // Your API Key
-                                'Content-Type': 'application/json', // Content Type
-                            },
-                        })
-                    console.log(result.data.image) //Output Result: Base 64 Image
-                    return result.data.image;
-                })
-            )
-            return images;
-          }
-       )
-
-       //Save All Data to DB
-       const UpdateDB=await step.run(
-          'UpdateDB',
-          async()=>{
-             const result=await convex.mutation(api.videoData.UpdateVideoRecord,{
-                  recordId:recordId,
-                  audioUrl:GenerateAudioFile,
-                  captionJson:GenerateCaptions,
-                  images:GenerateImages
-             });
-             return result;
-          }
-       )
-
-       return 'Executed Successfully!'
-    }
-)
